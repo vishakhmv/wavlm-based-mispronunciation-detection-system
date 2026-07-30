@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environments
+venv/
+.venv/
+env/
+
+# Data and Models
+data/
+datasets/
+outputs/
+models/
+checkpoints/
+*.pt
+*.pth
+logs/
+runs/
+*.wav
+*.flac
+*.mp3
+
+# Project specific
+important.txt
+*.pdf
