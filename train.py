@@ -84,6 +84,16 @@ def train(dataset_name: str, resume_path: str = None):
     elif dataset_name.lower() == "librispeech":
         train_dataset = LibriSpeechDataset(config.DATASET_DIR, split="train-clean-100")
         val_dataset = LibriSpeechDataset(config.DATASET_DIR, split="dev-clean")
+    elif dataset_name.lower() == "timit_l2":
+        from torch.utils.data import ConcatDataset
+        train_dataset = ConcatDataset([
+            TIMITDataset(config.DATASET_DIR, split="train"),
+            L2ArcticDataset(config.DATASET_DIR, split="train")
+        ])
+        val_dataset = ConcatDataset([
+            TIMITDataset(config.DATASET_DIR, split="test"),
+            L2ArcticDataset(config.DATASET_DIR, split="test")
+        ])
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
@@ -135,9 +145,11 @@ def train(dataset_name: str, resume_path: str = None):
     warmup_steps = int(total_steps * config.WARMUP_RATIO)
     scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
     
-    scaler = torch.amp.GradScaler(device.type) if device.type == 'cuda' else None
+    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
     best_val_loss = float('inf')
     start_epoch = 1
+    
+    history = []
     
     if resume_path and os.path.exists(resume_path):
         log_print(f"Resuming from checkpoint: {resume_path}")
@@ -155,55 +167,20 @@ def train(dataset_name: str, resume_path: str = None):
     atexit.register(log_file.close)
     
     log_print("Starting training loop...")
-    for epoch in range(start_epoch, config.EPOCHS + 1):
-        model.train()
-        epoch_loss = 0.0
-        
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [Train]")
-        for batch in progress_bar:
-            waveforms = batch["waveforms"].to(device)
-            input_lengths = batch["input_lengths"]
-            target_lengths = batch["target_lengths"]
+    try:
+        for epoch in range(start_epoch, config.EPOCHS + 1):
+            model.train()
+            epoch_loss = 0.0
             
-            targets = [t.to(device) for t in batch["feature_targets"]]
-            
-            optimizer.zero_grad(set_to_none=True)
-            
-            attention_mask = torch.zeros_like(waveforms, dtype=torch.long, device=device)
-            for b, length in enumerate(input_lengths):
-                attention_mask[b, :length] = 1
-                
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type == 'cuda')):
-                logits = model(waveforms, attention_mask=attention_mask)
-                downsampled_input_lengths = model.get_feat_extract_output_lengths(input_lengths)
-                loss = criterion(logits, targets, downsampled_input_lengths, target_lengths)
-            
-            if scaler is not None:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                
-            scheduler.step()
-            
-            epoch_loss += loss.item()
-            progress_bar.set_postfix({'loss': loss.item()})
-            
-        avg_train_loss = epoch_loss / len(train_loader)
-        
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [Val]"):
+            progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [Train]")
+            for batch in progress_bar:
                 waveforms = batch["waveforms"].to(device)
                 input_lengths = batch["input_lengths"]
                 target_lengths = batch["target_lengths"]
+                
                 targets = [t.to(device) for t in batch["feature_targets"]]
+                
+                optimizer.zero_grad(set_to_none=True)
                 
                 attention_mask = torch.zeros_like(waveforms, dtype=torch.long, device=device)
                 for b, length in enumerate(input_lengths):
@@ -213,35 +190,90 @@ def train(dataset_name: str, resume_path: str = None):
                     logits = model(waveforms, attention_mask=attention_mask)
                     downsampled_input_lengths = model.get_feat_extract_output_lengths(input_lengths)
                     loss = criterion(logits, targets, downsampled_input_lengths, target_lengths)
-                    
-                val_loss += loss.item()
                 
-        avg_val_loss = val_loss / len(val_loader)
-        
-        log_print(f"Epoch {epoch} Summary - Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
-        
-        checkpoint_state = {
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict() if scaler else None,
-            'val_loss': avg_val_loss,
-        }
-        
-        checkpoint_path = os.path.join(experiment_dir, "checkpoints", f"wavlm_mdd_epoch_{epoch}.pt")
-        torch.save(checkpoint_state, checkpoint_path)
-        log_print(f"Saved checkpoint to {checkpoint_path}")
-        
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            best_model_path = os.path.join(experiment_dir, "checkpoints", "best_model.pt")
-            torch.save(checkpoint_state, best_model_path)
-            log_print(f"*** New best model saved! (Val Loss: {best_val_loss:.4f}) ***")
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    
+                scheduler.step()
+                
+                epoch_loss += loss.item()
+                current_lr = scheduler.get_last_lr()[0]
+                progress_bar.set_postfix({'loss': loss.item(), 'lr': f"{current_lr:.2e}"})
+                
+            avg_train_loss = epoch_loss / len(train_loader)
+            
+            model.eval()
+            val_loss = 0.0
+            val_bar = tqdm(val_loader, desc=f"Epoch {epoch}/{config.EPOCHS} [Val]")
+            with torch.no_grad():
+                for batch in val_bar:
+                    waveforms = batch["waveforms"].to(device)
+                    input_lengths = batch["input_lengths"]
+                    target_lengths = batch["target_lengths"]
+                    targets = [t.to(device) for t in batch["feature_targets"]]
+                    
+                    attention_mask = torch.zeros_like(waveforms, dtype=torch.long, device=device)
+                    for b, length in enumerate(input_lengths):
+                        attention_mask[b, :length] = 1
+                        
+                    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type == 'cuda')):
+                        logits = model(waveforms, attention_mask=attention_mask)
+                        downsampled_input_lengths = model.get_feat_extract_output_lengths(input_lengths)
+                        loss = criterion(logits, targets, downsampled_input_lengths, target_lengths)
+                        
+                    val_loss += loss.item()
+                    val_bar.set_postfix({'loss': loss.item()})
+                    
+            avg_val_loss = val_loss / len(val_loader)
+            
+            log_print(f"Epoch {epoch} Summary - Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {current_lr:.2e}")
+            
+            history.append({
+                "epoch": epoch,
+                "train_loss": avg_train_loss,
+                "val_loss": avg_val_loss,
+                "lr": current_lr
+            })
+            with open(os.path.join(experiment_dir, "history.json"), 'w') as f:
+                json.dump(history, f, indent=4)
+            
+            checkpoint_state = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'scaler_state_dict': scaler.state_dict() if scaler else None,
+                'val_loss': avg_val_loss,
+            }
+            
+            checkpoint_path = os.path.join(experiment_dir, "checkpoints", "latest.pt")
+            torch.save(checkpoint_state, checkpoint_path)
+            log_print(f"Saved latest checkpoint to {checkpoint_path}")
+            
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                best_model_path = os.path.join(experiment_dir, "checkpoints", "best_model.pt")
+                torch.save(checkpoint_state, best_model_path)
+                log_print(f"*** New best model saved! (Val Loss: {best_val_loss:.4f}) ***")
+                
+    except KeyboardInterrupt:
+        log_print("\nTraining interrupted by user. Saving latest checkpoint...")
+        if 'checkpoint_state' in locals():
+            interrupt_path = os.path.join(experiment_dir, "checkpoints", "interrupted.pt")
+            torch.save(checkpoint_state, interrupt_path)
+            log_print(f"Saved interrupted checkpoint to {interrupt_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train WavLM-MDD model")
-    parser.add_argument("--dataset", type=str, default="l2arctic", choices=["l2arctic", "timit", "librispeech"], help="Dataset to train on")
+    parser.add_argument("--dataset", type=str, default="l2arctic", choices=["l2arctic", "timit", "librispeech", "timit_l2"], help="Dataset to train on")
     parser.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume training from")
     
     args = parser.parse_args()

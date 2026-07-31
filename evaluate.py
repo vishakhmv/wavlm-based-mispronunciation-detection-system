@@ -56,19 +56,17 @@ def decode_predictions(logits, input_lengths, model):
         
     return batch_decoded
 
-def calculate_metrics(predicted: List[int], target: List[int]) -> dict:
+def calculate_edits(predicted: List[int], target: List[int]) -> dict:
     """
-    Calculate FER, FAR, FRR, Precision, Recall, and F1 for binary sequences
-    using Levenshtein alignment.
+    Calculate raw counts of edits for binary sequences using Levenshtein alignment.
     """
     pred_str = "".join([str(x) for x in predicted])
     tgt_str = "".join([str(x) for x in target])
     
     if len(tgt_str) == 0:
-        return {"fer": 0.0, "far": 0.0, "frr": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+        return {"FA": 0, "FR": 0, "total_0": 0, "total_1": 0, "edits": 0, "N": 0}
         
     distance = Levenshtein.distance(pred_str, tgt_str)
-    fer = distance / len(tgt_str)
     
     ops = Levenshtein.editops(pred_str, tgt_str)
     FA = 0
@@ -94,23 +92,13 @@ def calculate_metrics(predicted: List[int], target: List[int]) -> dict:
     total_1 = tgt_str.count('1')
     total_0 = tgt_str.count('0')
     
-    far = FA / total_0 if total_0 > 0 else 0.0
-    frr = FR / total_1 if total_1 > 0 else 0.0
-    
-    TP = total_1 - FR
-    if TP < 0: TP = 0
-    
-    precision = TP / (TP + FA) if (TP + FA) > 0 else 0.0
-    recall = TP / total_1 if total_1 > 0 else 0.0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-    
     return {
-        "fer": fer,
-        "far": far,
-        "frr": frr,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1
+        "FA": FA,
+        "FR": FR,
+        "total_0": total_0,
+        "total_1": total_1,
+        "edits": distance,
+        "N": len(tgt_str)
     }
 
 def evaluate(checkpoint_path: str, dataset_name: str):
@@ -152,7 +140,7 @@ def evaluate(checkpoint_path: str, dataset_name: str):
     model.to(device)
     model.eval()
     
-    feature_metrics = {feat: {"fer": [], "far": [], "frr": [], "precision": [], "recall": [], "f1": []} for feat in PHONOLOGICAL_FEATURES}
+    feature_stats = {feat: {"FA": 0, "FR": 0, "total_0": 0, "total_1": 0, "edits": 0, "N": 0} for feat in PHONOLOGICAL_FEATURES}
     
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
@@ -181,35 +169,77 @@ def evaluate(checkpoint_path: str, dataset_name: str):
                     pred_seq = decoded_seqs[i]
                     tgt_seq = targets[i][b, :target_len].cpu().tolist()
                     
-                    metrics = calculate_metrics(pred_seq, tgt_seq)
-                    for k in feature_metrics[feat_name]:
-                        feature_metrics[feat_name][k].append(metrics[k])
+                    stats = calculate_edits(pred_seq, tgt_seq)
+                    for k in feature_stats[feat_name]:
+                        feature_stats[feat_name][k] += stats[k]
                     
     aggregated_results = {}
     print("\n--- Final Evaluation Results ---")
     
-    global_avgs = {"fer": 0, "far": 0, "frr": 0, "precision": 0, "recall": 0, "f1": 0}
+    global_stats = {"FA": 0, "FR": 0, "total_0": 0, "total_1": 0, "edits": 0, "N": 0}
     
-    for feat_name, metrics in feature_metrics.items():
-        aggregated_results[feat_name] = {}
+    for feat_name, stats in feature_stats.items():
+        FA = stats["FA"]
+        FR = stats["FR"]
+        total_0 = stats["total_0"]
+        total_1 = stats["total_1"]
+        edits = stats["edits"]
+        N = stats["N"]
         
-        for k in global_avgs.keys():
-            val_list = metrics[k]
-            avg_val = sum(val_list) / len(val_list) if val_list else 0.0
-            aggregated_results[feat_name][k] = avg_val
-            global_avgs[k] += avg_val
+        fer = edits / N if N > 0 else 0.0
+        far = FA / total_0 if total_0 > 0 else 0.0
+        frr = FR / total_1 if total_1 > 0 else 0.0
+        
+        TP = total_1 - FR
+        if TP < 0: TP = 0
+        FP = FA
+        FN = FR
+        TN = total_0 - FA
+        if TN < 0: TN = 0
+        
+        precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
+        recall = TP / total_1 if total_1 > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        aggregated_results[feat_name] = {
+            "fer": fer, "far": far, "frr": frr,
+            "precision": precision, "recall": recall, "f1": f1,
+            "confusion_matrix": {"TP": TP, "FP": FP, "FN": FN, "TN": TN}
+        }
+        
+        for k in global_stats:
+            global_stats[k] += stats[k]
             
-    for k in global_avgs.keys():
-        global_avgs[k] /= len(PHONOLOGICAL_FEATURES)
-        
-    aggregated_results["GLOBAL_AVERAGE"] = global_avgs
+    g_FA = global_stats["FA"]
+    g_FR = global_stats["FR"]
+    g_total_0 = global_stats["total_0"]
+    g_total_1 = global_stats["total_1"]
+    g_edits = global_stats["edits"]
+    g_N = global_stats["N"]
     
-    print(f"FER:       {global_avgs['fer'] * 100:.2f}%")
-    print(f"FAR:       {global_avgs['far'] * 100:.2f}%")
-    print(f"FRR:       {global_avgs['frr'] * 100:.2f}%")
-    print(f"Precision: {global_avgs['precision'] * 100:.2f}%")
-    print(f"Recall:    {global_avgs['recall'] * 100:.2f}%")
-    print(f"F1 Score:  {global_avgs['f1'] * 100:.2f}%")
+    g_fer = g_edits / g_N if g_N > 0 else 0.0
+    g_far = g_FA / g_total_0 if g_total_0 > 0 else 0.0
+    g_frr = g_FR / g_total_1 if g_total_1 > 0 else 0.0
+    
+    g_TP = g_total_1 - g_FR
+    if g_TP < 0: g_TP = 0
+    g_FP = g_FA
+    
+    g_precision = g_TP / (g_TP + g_FP) if (g_TP + g_FP) > 0 else 0.0
+    g_recall = g_TP / g_total_1 if g_total_1 > 0 else 0.0
+    g_f1 = 2 * (g_precision * g_recall) / (g_precision + g_recall) if (g_precision + g_recall) > 0 else 0.0
+    
+    aggregated_results["GLOBAL"] = {
+        "fer": g_fer, "far": g_far, "frr": g_frr,
+        "precision": g_precision, "recall": g_recall, "f1": g_f1
+    }
+    
+    print(f"FER:       {g_fer * 100:.2f}%")
+    print(f"FAR:       {g_far * 100:.2f}%")
+    print(f"FRR:       {g_frr * 100:.2f}%")
+    print(f"Precision: {g_precision * 100:.2f}%")
+    print(f"Recall:    {g_recall * 100:.2f}%")
+    print(f"F1 Score:  {g_f1 * 100:.2f}%")
     
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
