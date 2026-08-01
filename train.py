@@ -195,14 +195,19 @@ def train(dataset_name: str, resume_path: str = None):
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
+                    scale_after = scaler.get_scale()
+                    
+                    if scale_before <= scale_after:
+                        scheduler.step()
                 else:
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
-                    
-                scheduler.step()
+                    scheduler.step()
                 
                 epoch_loss += loss.item()
                 current_lr = scheduler.get_last_lr()[0]

@@ -73,10 +73,18 @@ logger = logging.getLogger(__name__)
 
 def _get_features_list(phoneme: str) -> list:
     """Helper to safely fetch features and warn on unknown phonemes."""
-    phoneme = phoneme.upper().strip("0123")
+    # Clean up L2-ARCTIC transcription artifacts
+    phoneme = phoneme.upper().strip("0123_`()")
+    
+    # Map common alternative phonemes
+    if phoneme == 'AX':
+        phoneme = 'AH'
+    elif phoneme == 'SPN':
+        phoneme = 'SIL'
+        
     features = PHONEME_TO_FEATURES.get(phoneme)
     if features is None:
-        if phoneme.lower() not in ['sil', '|']:
+        if phoneme.lower() not in ['sil', '|', '']:
             logger.warning(f"Unknown phoneme encountered: '{phoneme}'")
         return []
     return features
