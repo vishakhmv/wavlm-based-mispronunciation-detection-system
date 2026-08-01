@@ -38,8 +38,7 @@ class TIMITDataset(BaseSpeechDataset):
         
         valid_dirs = [d for d in search_dirs if os.path.exists(d)]
         if not valid_dirs:
-            logger.warning(f"No valid TIMIT split directory found for {split}")
-            return
+            raise FileNotFoundError(f"No valid TIMIT split directory found for {split} in {self.data_dir}")
             
         for scan_dir in valid_dirs:
             for root, _, files in os.walk(scan_dir):
@@ -60,7 +59,8 @@ class TIMITDataset(BaseSpeechDataset):
                             phonemes = self._parse_phn_file(phn_path)
                             self.samples.append({
                                 "audio_path": audio_path,
-                                "phonemes": phonemes
+                                "phonemes": phonemes,
+                                "feature_targets": self.phonemes_to_feature_targets(phonemes)
                             })
                         else:
                             self.skipped_samples += 1
@@ -100,12 +100,11 @@ class TIMITDataset(BaseSpeechDataset):
             
         phonemes = item["phonemes"]
         phoneme_sequence = " ".join(phonemes)
-        
-        feature_targets = self.phonemes_to_feature_targets(phonemes)
             
         return {
             "waveform": waveform,
-            "feature_targets": feature_targets,
+            "feature_targets": item["feature_targets"],
             "audio_path": item["audio_path"],
+            "phonemes": phonemes,
             "phoneme_sequence": phoneme_sequence
         }

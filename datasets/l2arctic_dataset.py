@@ -46,7 +46,7 @@ class L2ArcticDataset(BaseSpeechDataset):
                 parts = line.strip().split()
                 if len(parts) >= 2:
                     file_id = parts[0]
-                    phonemes = parts[1:]
+                    phonemes = [p for p in parts[1:] if p.lower() not in ('sil', '|')]
                     
                     if '/' in file_id:
                         speaker, audio_name = file_id.split('/', 1)

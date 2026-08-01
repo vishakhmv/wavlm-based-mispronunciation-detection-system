@@ -76,7 +76,7 @@ def _get_features_list(phoneme: str) -> list:
     phoneme = phoneme.upper().strip("0123")
     features = PHONEME_TO_FEATURES.get(phoneme)
     if features is None:
-        if phoneme.lower() != 'sil':
+        if phoneme.lower() not in ['sil', '|']:
             logger.warning(f"Unknown phoneme encountered: '{phoneme}'")
         return []
     return features

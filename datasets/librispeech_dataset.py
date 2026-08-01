@@ -69,8 +69,7 @@ class LibriSpeechDataset(BaseSpeechDataset):
 
     def _load_transcripts(self, transcript_path):
         if not os.path.exists(transcript_path):
-            logger.warning(f"Transcript not found at {transcript_path}")
-            return
+            raise FileNotFoundError(f"Transcript not found at {transcript_path}")
             
         with open(transcript_path, 'r') as f:
             for line in f:
@@ -93,7 +92,8 @@ class LibriSpeechDataset(BaseSpeechDataset):
                         else:
                             self.samples.append({
                                 "audio_path": audio_path,
-                                "phonemes": phonemes
+                                "phonemes": phonemes,
+                                "feature_targets": self.phonemes_to_feature_targets(phonemes)
                             })
                     else:
                         self.skipped_samples += 1
@@ -120,12 +120,11 @@ class LibriSpeechDataset(BaseSpeechDataset):
             
         phonemes = item["phonemes"]
         phoneme_sequence = " ".join(phonemes)
-        
-        feature_targets = self.phonemes_to_feature_targets(phonemes)
             
         return {
             "waveform": waveform,
-            "feature_targets": feature_targets,
+            "feature_targets": item["feature_targets"],
             "audio_path": item["audio_path"],
+            "phonemes": phonemes,
             "phoneme_sequence": phoneme_sequence
         }
