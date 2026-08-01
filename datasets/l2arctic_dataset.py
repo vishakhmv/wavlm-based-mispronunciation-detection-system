@@ -39,8 +39,7 @@ class L2ArcticDataset(BaseSpeechDataset):
 
     def _load_annotations(self, annotation_file):
         if not os.path.exists(annotation_file):
-            logger.warning(f"Annotation file not found at {annotation_file}")
-            return
+            raise FileNotFoundError(f"Annotation file not found at {annotation_file}")
             
         with open(annotation_file, 'r') as f:
             for line in f:
@@ -59,6 +58,9 @@ class L2ArcticDataset(BaseSpeechDataset):
                             audio_name = audio_name[:-4]
                     elif ',' in file_id:
                         speaker, audio_name = file_id.split(',', 1)
+                    elif '_' in file_id:
+                        speaker, audio_name = file_id.split('_', 1)
+                        speaker = speaker.upper()
                     else:
                         import re
                         match = re.match(r"([A-Za-z]+)(.*)", file_id)
@@ -76,8 +78,11 @@ class L2ArcticDataset(BaseSpeechDataset):
                     if os.path.exists(audio_path):
                         self.samples.append({
                             "audio_path": audio_path,
-                            "phonemes": phonemes
+                            "phonemes": phonemes,
+                            "feature_targets": self.phonemes_to_feature_targets(phonemes)
                         })
+                    else:
+                        logger.warning(f"Missing audio: {audio_path}")
 
     def _print_stats(self):
         logger.info(f"--- L2-ARCTIC Dataset ({self.split}) Validation ---")
@@ -99,12 +104,11 @@ class L2ArcticDataset(BaseSpeechDataset):
         
         phonemes = item["phonemes"]
         phoneme_sequence = " ".join(phonemes)
-        
-        feature_targets = self.phonemes_to_feature_targets(phonemes)
             
         return {
             "waveform": waveform,
-            "feature_targets": feature_targets,
+            "feature_targets": item["feature_targets"],
             "audio_path": item["audio_path"],
+            "phonemes": phonemes,
             "phoneme_sequence": phoneme_sequence
         }
