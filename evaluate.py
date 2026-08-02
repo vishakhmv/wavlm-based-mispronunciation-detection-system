@@ -6,6 +6,8 @@ from typing import List
 import json
 import argparse
 import datetime
+import matplotlib.pyplot as plt
+import numpy as np
 
 from config import config
 from datasets.collate import mdd_collate_fn
@@ -15,6 +17,51 @@ from datasets.l2arctic_dataset import L2ArcticDataset
 from torch.utils.data import DataLoader
 from model import WavLMMDD
 from phoneme_features import PHONOLOGICAL_FEATURES
+
+def plot_learning_curve(history_path, output_dir):
+    if not os.path.exists(history_path):
+        return
+    with open(history_path, 'r') as f:
+        history = json.load(f)
+    if not history:
+        return
+    epochs = [x['epoch'] for x in history]
+    train_loss = [x.get('train_loss', 0) for x in history]
+    val_loss = [x.get('val_loss', 0) for x in history]
+    
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, train_loss, label='Train Loss', marker='o')
+    plt.plot(epochs, val_loss, label='Validation Loss', marker='o')
+    plt.title('Learning Curve')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'learning_curve.png'))
+    plt.close()
+
+def plot_confusion_matrix(tp, fp, fn, tn, output_dir):
+    matrix = np.array([[tn, fp], [fn, tp]])
+    fig, ax = plt.subplots(figsize=(5, 5))
+    cax = ax.matshow(matrix, cmap='Blues')
+    
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, str(matrix[i, j]), va='center', ha='center',
+                    color='white' if matrix[i, j] > matrix.max() / 2. else 'black')
+            
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(['Negative', 'Positive'])
+    ax.set_yticklabels(['Negative', 'Positive'])
+    plt.title('Global Confusion Matrix', pad=20)
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
+    ax.xaxis.set_ticks_position('bottom')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
+    plt.close()
 
 def decode_predictions(logits, input_lengths, model):
     """
@@ -224,14 +271,23 @@ def evaluate(checkpoint_path: str, dataset_name: str):
     g_TP = g_total_1 - g_FR
     if g_TP < 0: g_TP = 0
     g_FP = g_FA
+    g_FN = g_FR
+    g_TN = g_total_0 - g_FA
+    if g_TN < 0: g_TN = 0
     
     g_precision = g_TP / (g_TP + g_FP) if (g_TP + g_FP) > 0 else 0.0
     g_recall = g_TP / g_total_1 if g_total_1 > 0 else 0.0
     g_f1 = 2 * (g_precision * g_recall) / (g_precision + g_recall) if (g_precision + g_recall) > 0 else 0.0
     
-    aggregated_results["GLOBAL"] = {
-        "fer": g_fer, "far": g_far, "frr": g_frr,
-        "precision": g_precision, "recall": g_recall, "f1": g_f1
+    aggregated_results["global_metrics"] = {
+        "FER": g_fer, "FAR": g_far, "FRR": g_frr,
+        "precision": g_precision, "recall": g_recall, "f1": g_f1,
+        "confusion_matrix": {"TP": g_TP, "FP": g_FP, "FN": g_FN, "TN": g_TN}
+    }
+    
+    final_output = {
+        "global_metrics": aggregated_results["global_metrics"],
+        "per_feature_metrics": {k: v for k, v in aggregated_results.items() if k != "global_metrics"}
     }
     
     print(f"FER:       {g_fer * 100:.2f}%")
@@ -241,14 +297,30 @@ def evaluate(checkpoint_path: str, dataset_name: str):
     print(f"Recall:    {g_recall * 100:.2f}%")
     print(f"F1 Score:  {g_f1 * 100:.2f}%")
     
-    os.makedirs(config.RESULTS_DIR, exist_ok=True)
+    train_dataset = "unknown"
+    if "experiment_" in checkpoint_path:
+        try:
+            parts = checkpoint_path.split("experiment_")[1].split(os.sep)[0].split("_")
+            train_dataset = "_".join(parts[:-2])
+        except:
+            pass
+            
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out_file = os.path.join(config.RESULTS_DIR, f"eval_{dataset_name}_{timestamp}.json")
+    eval_folder_name = f"eval_{train_dataset}_model_on_{dataset_name}_{timestamp}"
+    eval_out_dir = os.path.join(config.RESULTS_DIR, eval_folder_name)
+    os.makedirs(eval_out_dir, exist_ok=True)
+    
+    out_file = os.path.join(eval_out_dir, "evaluation_report.json")
     
     with open(out_file, 'w') as f:
-        json.dump(aggregated_results, f, indent=4)
+        json.dump(final_output, f, indent=4)
         
     print(f"\nDetailed per-feature results saved to: {out_file}")
+    
+    plot_confusion_matrix(g_TP, g_FP, g_FN, g_TN, eval_out_dir)
+    history_path = os.path.join(os.path.dirname(os.path.dirname(checkpoint_path)), "history.json")
+    plot_learning_curve(history_path, eval_out_dir)
+    print(f"Visualizations saved to: {eval_out_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate WavLM-MDD model")

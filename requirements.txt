@@ -12,3 +12,4 @@ soundfile>=0.12.1
 python-Levenshtein>=0.21.0
 PyYAML>=6.0
 tensorboard>=2.13.0
+matplotlib>=3.7.0
