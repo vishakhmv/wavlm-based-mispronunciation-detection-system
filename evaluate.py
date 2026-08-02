@@ -306,8 +306,8 @@ def evaluate(checkpoint_path: str, dataset_name: str):
             pass
             
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    eval_folder_name = f"eval_{train_dataset}_model_on_{dataset_name}_{timestamp}"
-    eval_out_dir = os.path.join(config.RESULTS_DIR, eval_folder_name)
+    eval_folder_name = f"evaluate_{train_dataset}_model_on_{dataset_name}_{timestamp}"
+    eval_out_dir = os.path.join(config.OUTPUT_DIR, eval_folder_name)
     os.makedirs(eval_out_dir, exist_ok=True)
     
     out_file = os.path.join(eval_out_dir, "evaluation_report.json")
