@@ -8,7 +8,17 @@ class WavLMMDD(nn.Module):
     def __init__(self, model_name=config.MODEL_NAME, num_features=config.NUM_FEATURES):
         super(WavLMMDD, self).__init__()
         
-        self.wavlm = WavLMModel.from_pretrained(model_name)
+        self.wavlm = WavLMModel.from_pretrained(
+            model_name,
+            apply_spec_augment=True,
+            mask_time_prob=0.05,
+            mask_feature_prob=0.05
+        )
+        
+        # Verify configuration overrides took effect
+        print(f"SpecAugment Enabled: {self.wavlm.config.apply_spec_augment}")
+        print(f"Time Mask Prob: {self.wavlm.config.mask_time_prob}")
+        print(f"Feature Mask Prob: {self.wavlm.config.mask_feature_prob}")
         
         self.wavlm.freeze_feature_encoder()
         
