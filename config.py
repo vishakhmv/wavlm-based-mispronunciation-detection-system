@@ -19,7 +19,7 @@ class Config:
     NUM_FEATURES: int = 35
     NUM_OUTPUTS: int = 71
     
-    BATCH_SIZE: int = 8
+    BATCH_SIZE: int = 4
     EPOCHS: int = 30
     LEARNING_RATE: float = 1e-4
     WEIGHT_DECAY: float = 0.005
