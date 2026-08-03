@@ -22,6 +22,7 @@ class LibriSpeechDataset(BaseSpeechDataset):
         if "LibriSpeech" not in data_dir:
             data_dir = os.path.join(data_dir, "LibriSpeech")
             
+        self.root_dir = data_dir
         self.data_dir = os.path.join(data_dir, split)
         self.split = split
         self.samples = []
@@ -81,10 +82,25 @@ class LibriSpeechDataset(BaseSpeechDataset):
                     text = parts[1]
                     
                     speaker_id, chapter_id, _ = file_id.split('-')
+                    
+                    # 1. Standard nested structure (flac)
                     audio_path = os.path.join(self.data_dir, speaker_id, chapter_id, f"{file_id}.flac")
                     
+                    # 2. Standard nested structure (wav)
                     if not os.path.exists(audio_path):
-                        audio_path = audio_path.replace('.flac', '.wav')
+                        audio_path = os.path.join(self.data_dir, speaker_id, chapter_id, f"{file_id}.wav")
+                        
+                    # 3. Flattened structure inside split directory (flac)
+                    if not os.path.exists(audio_path):
+                        audio_path = os.path.join(self.data_dir, f"{file_id}.flac")
+                        
+                    # 4. Flattened structure inside split directory (wav)
+                    if not os.path.exists(audio_path):
+                        audio_path = os.path.join(self.data_dir, f"{file_id}.wav")
+                        
+                    # 5. Flattened structure in root LibriSpeech directory (wav)
+                    if not os.path.exists(audio_path):
+                        audio_path = os.path.join(self.root_dir, f"{file_id}.wav")
                         
                     if os.path.exists(audio_path):
                         phonemes = self._text_to_phonemes(text)
