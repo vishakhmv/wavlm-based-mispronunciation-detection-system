@@ -33,6 +33,8 @@ class LibriSpeechDataset(BaseSpeechDataset):
         
         transcript_path = os.path.join(data_dir, f"{split}.txt")
         if not os.path.exists(transcript_path):
+            transcript_path = os.path.join(data_dir, f"{split}_transcript.txt")
+        if not os.path.exists(transcript_path):
             transcript_path = os.path.join(self.data_dir, f"{split}.txt")
         if not os.path.exists(transcript_path):
             transcript_path = os.path.join(self.data_dir, f"{split}_transcript.txt")
